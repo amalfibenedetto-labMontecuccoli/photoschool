@@ -417,6 +417,24 @@ fn every_blend_mode_matches_reference_on_opaque_pixels() {
     }
 }
 
+/// #9483: a Color Lookup's bounded output survives full coverage over a huge 32-bit pixel. The
+/// blend back to the backdrop computed `b + (r - b) · k`, and in f32 the difference had already
+/// lost the small result (1e8 and 0.5 gave 0).
+#[test]
+fn full_coverage_adjustment_keeps_its_result_over_huge_hdr_values() {
+    for v in [1.0e6_f32, 1.0e8, -1.0e6] {
+        let mut d = Document::new("hdr", Size::new(2, 2), ColorMode::Rgb, SampleType::F32);
+        let mut base = Layer::raster("b", PixelFormat::RGBA32F);
+        base.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 2), &[v, v, v, 1.0]);
+        let look = Adjustment::ColorLookup { name: "half".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size: 2, tetrahedral: false, dither: false };
+        d.layers = vec![base, Layer::new("look", LayerContent::Adjustment(look))];
+        let got = px(&d, 0, 0);
+        for c in &got[..3] {
+            assert!((c - 0.5).abs() < 1e-6, "{v}: {got:?}");
+        }
+    }
+}
+
 /// One opaque pixel: `top` in `mode` over `bottom`, in a document of `depth`.
 fn blend_px(depth: SampleType, mode: BlendMode, bottom: [f32; 3], top: [f32; 3]) -> [f32; 4] {
     let mut d = Document::new("b", Size::new(1, 1), ColorMode::Rgb, depth);
@@ -4116,12 +4134,8 @@ fn reused_render_matches_previous_allocating_stack() {
                     adjust::apply_in(adj, &mut adjusted, adjust::Transfer::for_document(doc.mode, depth), Some(depth), doc.mode);
                     for (b, a) in previous.px.iter_mut().zip(&adjusted.px) {
                         let blended = blend::blend_rgb(layer.blend, [b[0], b[1], b[2]], [a[0], a[1], a[2]]);
-                        *b = [
-                            b[0] + (blended[0] - b[0]) * layer.opacity,
-                            b[1] + (blended[1] - b[1]) * layer.opacity,
-                            b[2] + (blended[2] - b[2]) * layer.opacity,
-                            b[3],
-                        ];
+                        let (k, j) = (layer.opacity, 1.0 - layer.opacity);
+                        *b = [b[0] * j + blended[0] * k, b[1] * j + blended[1] * k, b[2] * j + blended[2] * k, b[3]];
                     }
                     if let Some(q) = adjustment_quantum(depth) {
                         quantize(&mut previous, q);
