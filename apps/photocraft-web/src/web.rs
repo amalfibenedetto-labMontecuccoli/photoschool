@@ -103,7 +103,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets }))
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, school: Default::default() }))
                 }),
             )
             .await;
@@ -270,6 +270,7 @@ struct WebShell {
     served: Served,
     database: Option<web_sys::IdbDatabase>,
     presets: crate::preset_bridge::Bridge,
+    school: crate::school::School,
 }
 
 impl WebShell {
@@ -360,6 +361,7 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        self.school.poll(ctx, &self.inbox);
         self.serve_fonts(ctx);
         self.app.logic_frame(ctx, frame);
         self.save_presets(ctx);
@@ -367,6 +369,14 @@ impl eframe::App for WebShell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        // Nobody works before signing in with the school account, so nothing is made that could not be saved.
+        if crate::drive::needs_sign_in() {
+            self.school.gate(ui);
+            self.school.windows(&ctx, &self.inbox);
+            return;
+        }
+        self.school.bar(ui, &mut self.app);
         // Only while a preset change is unsaved. Storage the browser denies from the start (a
         // sandboxed iframe, blocked site data) loses nothing until the first change, and that
         // change brings the banner with the reason.
@@ -391,6 +401,7 @@ impl eframe::App for WebShell {
             });
         }
         self.app.ui_frame(ui, frame);
+        self.school.windows(&ctx, &self.inbox);
         self.save_presets(ui.ctx());
         self.app.finish_type_reset_pass(ui.ctx());
     }
@@ -438,10 +449,15 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
             // No save dialog on the web: the suggested name becomes the download name.
             FileDialogRequest::Save { suggested } => {
                 let name = std::path::Path::new(&suggested).file_name().map_or_else(|| suggested.clone(), |n| n.to_string_lossy().to_string());
-                reply.send(Some(FileDialogAnswer::SaveTo(name)));
+                if crate::drive::drive_disabled() {
+                    reply.send(Some(FileDialogAnswer::SaveTo(name)));
+                } else {
+                    // The student names the file in our own window; the file then goes to Drive.
+                    crate::school::ask_name(&name, reply);
+                }
             }
         })),
-        write: Some(Box::new(|path: &str, bytes: &[u8]| download(path, bytes))),
+        write: Some(Box::new(|path: &str, bytes: &[u8]| crate::drive::deliver(path, bytes))),
         // A download may be cancelled and never reports back: it doesn't save the document.
         write_unconfirmed: true,
         encode_png: Some(Box::new(|w, h, rgba| {
@@ -465,7 +481,7 @@ fn local_storage() -> Option<web_sys::Storage> {
 }
 
 /// Trigger a browser download of `bytes` named after the last component of `path`.
-fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "photocraft".into());
     let window = web_sys::window().ok_or("no window")?;
@@ -491,7 +507,7 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn mime_for(name: &str) -> &'static str {
+pub(crate) fn mime_for(name: &str) -> &'static str {
     match name.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",

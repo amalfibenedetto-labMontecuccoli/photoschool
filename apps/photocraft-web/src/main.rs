@@ -23,6 +23,15 @@ mod preset_bridge;
 mod indexed_presets;
 
 #[cfg(target_arch = "wasm32")]
+mod drive;
+
+#[cfg(target_arch = "wasm32")]
+mod drivefmt;
+
+#[cfg(target_arch = "wasm32")]
+mod school;
+
+#[cfg(target_arch = "wasm32")]
 mod web;
 
 #[cfg(target_arch = "wasm32")]
