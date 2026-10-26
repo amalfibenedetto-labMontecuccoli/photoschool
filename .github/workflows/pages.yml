@@ -36,7 +36,7 @@ jobs:
       # The upstream packaging script builds the app and the small page that starts it, and cuts
       # the wasm into parts so no file is too large. It writes dist/release/photocraft-web-<ver>.zip.
       - name: Build the web app
-        run: packaging/web/package.sh
+        run: bash packaging/web/package.sh
 
       - name: Unpack the site
         run: |
