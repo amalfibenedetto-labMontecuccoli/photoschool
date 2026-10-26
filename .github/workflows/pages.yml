@@ -1,0 +1,62 @@
+# Builds the browser version (apps/photocraft-web) and publishes it on GitHub Pages.
+# Self-contained: needs no secrets and no other repository.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk
+
+      # The upstream packaging script builds the app and the small page that starts it, and cuts
+      # the wasm into parts so no file is too large. It writes dist/release/photocraft-web-<ver>.zip.
+      - name: Build the web app
+        run: packaging/web/package.sh
+
+      - name: Unpack the site
+        run: |
+          mkdir site
+          unzip -q dist/release/photocraft-web-*.zip -d site
+          mv site/photocraft-web-*/* site/ 2>/dev/null || true
+          rmdir site/photocraft-web-* 2>/dev/null || true
+          touch site/.nojekyll
+          ls -la site | head -20
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
