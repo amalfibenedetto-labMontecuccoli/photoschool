@@ -46,6 +46,8 @@ jobs:
           unzip -q dist/release/photocraft-web-*.zip -d site
           mv site/photocraft-web-*/* site/ 2>/dev/null || true
           rmdir site/photocraft-web-* 2>/dev/null || true
+          # The app's glue imports helper scripts from snippets/; the zip doesn't carry them.
+          if [ -d dist/web/snippets ]; then cp -R dist/web/snippets site/app/snippets; fi
           touch site/.nojekyll
           ls -la site | head -20
 
