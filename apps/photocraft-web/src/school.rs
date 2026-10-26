@@ -48,7 +48,6 @@ pub struct School {
     browsing: bool,
     /// The editor has changes that are not in Drive yet.
     unsaved: bool,
-    guide_open: bool,
     teacher_email: String,
     teacher_error: String,
     notice: Option<String>,
@@ -125,7 +124,7 @@ impl School {
         egui::Panel::top("school_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // About the width of what follows, so the group sits near the middle.
-                ui.add_space(((ui.available_width() - 760.0) / 2.0).max(8.0));
+                ui.add_space(((ui.available_width() - 700.0) / 2.0).max(8.0));
                 let name = drive::account().unwrap_or_else(|| "Google".to_string());
                 ui.label(RichText::new(name.chars().take(24).collect::<String>()).strong());
                 if ui.button("Esci").on_hover_text("Esci dall'account e prepara il computer per il prossimo alunno").clicked() {
@@ -156,9 +155,6 @@ impl School {
                     self.listing = Some(Listing::Loading);
                     drive::list_drive();
                 }
-                if ui.add(egui::Button::new("Guida").min_size(vec2(60.0, 26.0))).clicked() {
-                    self.guide_open = !self.guide_open;
-                }
             });
         });
     }
@@ -168,7 +164,6 @@ impl School {
         self.notice_window(ctx);
         self.name_window(ctx);
         self.list_window(ctx);
-        self.guide_window(ctx);
         let _ = inbox;
     }
 
@@ -185,30 +180,6 @@ impl School {
         });
         if close {
             self.notice = None;
-        }
-    }
-
-    /// A small card with the few things a student needs; it opens over the editor, so nothing is left.
-    fn guide_window(&mut self, ctx: &egui::Context) {
-        if !self.guide_open {
-            return;
-        }
-        let mut open = true;
-        egui::Window::new("Guida rapida").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::RIGHT_TOP, vec2(-12.0, 48.0)).show(ctx, |ui| {
-            ui.set_max_width(340.0);
-            for line in [
-                "1. Accedi con l'account @smpavullo.com.",
-                "2. Salva su Drive: scrivi il nome del file.",
-                "3. Apri da Drive: riapri un tuo file per continuare.",
-                "4. I miei file: copia il link e incollalo in Classroom, oppure invialo al docente.",
-                "5. Foto del docente: aprila in Classroom, premi i tre puntini e Scarica; poi qui Apri… e scegli la foto.",
-                "6. Finito? Controlla di aver salvato e premi Esci.",
-            ] {
-                ui.label(line);
-            }
-        });
-        if !open {
-            self.guide_open = false;
         }
     }
 

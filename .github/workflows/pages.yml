@@ -48,7 +48,6 @@ jobs:
           rmdir site/photocraft-web-* 2>/dev/null || true
           # The app's glue imports helper scripts from snippets/; the zip doesn't carry them.
           if [ -d dist/web/snippets ]; then cp -R dist/web/snippets site/app/snippets; fi
-          cp guida.html site/guida.html
           touch site/.nojekyll
           ls -la site | head -20
 
