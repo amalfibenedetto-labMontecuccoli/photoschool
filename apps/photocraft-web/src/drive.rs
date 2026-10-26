@@ -51,7 +51,7 @@ thread_local! {
     static TOKEN: RefCell<Option<Token>> = const { RefCell::new(None) };
     /// A link ready to show: the file name, its link and the folder's link, taken by the app's
     /// next frame.
-    static LINK: RefCell<Option<(String, String, String)>> = const { RefCell::new(None) };
+    static LINK: RefCell<Option<(String, String, String, String)>> = const { RefCell::new(None) };
     /// The signed-in student's name.
     static USER: RefCell<Option<String>> = const { RefCell::new(None) };
     /// The student's files found in Drive (id, name, last change) or why not.
@@ -77,12 +77,12 @@ pub fn remember_context(ctx: &egui::Context) {
 }
 
 /// A link to a drawing that was just saved, if there is one: take it and show it.
-pub fn take_link() -> Option<(String, String, String)> {
+pub fn take_link() -> Option<(String, String, String, String)> {
     LINK.with(|l| l.borrow_mut().take())
 }
 
-fn publish_link(name: &str, link: &str, folder: &str) {
-    LINK.with(|l| *l.borrow_mut() = Some((name.to_string(), link.to_string(), folder.to_string())));
+fn publish_link(name: &str, link: &str, folder: &str, id: &str) {
+    LINK.with(|l| *l.borrow_mut() = Some((name.to_string(), link.to_string(), folder.to_string(), id.to_string())));
     wake();
 }
 
@@ -262,6 +262,39 @@ pub fn sign_out() {
     }
 }
 
+/// The only email domain a file may be sent to: the school's.
+pub const SCHOOL_DOMAIN: &str = DOMAIN_HINT;
+
+/// Hand in: share the saved file `id` with the teacher at `teacher` (read-only; Drive emails
+/// them), and tell the student how it went.
+pub fn send_to_teacher(id: &str, name: &str, teacher: &str) {
+    let (id, name, teacher) = (id.to_string(), name.to_string(), teacher.to_string());
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = async {
+            let token = access_token().await?;
+            share_with_teacher(&token, &id, &name, &teacher).await
+        }
+        .await;
+        match result {
+            Ok(()) => notify(&format!("File inviato a {teacher}.\nÈ anche nel tuo Google Drive, cartella «{FOLDER_NAME}»: {name}")),
+            Err(e) => notify(&format!("Il file è nel tuo Drive ma NON è stato inviato a {teacher}: {e}")),
+        }
+    });
+}
+
+/// Share the saved file with the teacher at `teacher` (read-only; Drive emails them).
+async fn share_with_teacher(token: &str, file_id: &str, file_name: &str, teacher: &str) -> Result<(), String> {
+    let student = request(token, "GET", &format!("{DRIVE_URL}/about?fields=user(displayName)"), None, None)
+        .await
+        .ok()
+        .and_then(|answer| drivefmt::user_name(&answer))
+        .unwrap_or_default();
+    let message = encode(&drivefmt::share_message(&student, file_name));
+    let url = format!("{FILES_URL}/{file_id}/permissions?sendNotificationEmail=true&emailMessage={message}&fields=id");
+    let body = json!({ "type": "user", "role": "reader", "emailAddress": teacher });
+    request(token, "POST", &url, Some("application/json"), Some(body.to_string().into_bytes())).await.map(|_| ())
+}
+
 /// The student's name from Drive, kept for the toolbar.
 async fn remember_user(token: &str) {
     if USER.with(|u| u.borrow().is_some()) {
@@ -286,7 +319,7 @@ pub fn deliver(path: &str, bytes: &[u8]) -> Result<(), String> {
             Ok(saved) => match link_for_school(&saved).await {
                 Ok(link) => {
                     copy_to_clipboard(&link);
-                    publish_link(&name, &link, &saved.folder);
+                    publish_link(&name, &link, &saved.folder, &saved.id);
                 }
                 Err(e) => notify(&format!("Salvato nel tuo Drive, cartella «{FOLDER_NAME}»: {name}. Il link non è pronto: {e}")),
             },
@@ -458,6 +491,8 @@ fn start_token_request(resolve: &js_sys::Function, reject: &js_sys::Function) ->
     set(&config, "client_id", &JsValue::from_str(CLIENT_ID))?;
     set(&config, "scope", &JsValue::from_str(SCOPE))?;
     set(&config, "hd", &JsValue::from_str(DOMAIN_HINT))?;
+    // Always let the student pick the account, so a shared computer never signs in by itself.
+    set(&config, "prompt", &JsValue::from_str("select_account"))?;
     set(&config, "callback", &on_token)?;
     set(&config, "error_callback", &on_error)?;
     let client = init.call1(&oauth2, &config).map_err(js_error)?;

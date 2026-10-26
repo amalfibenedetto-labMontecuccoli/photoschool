@@ -44,7 +44,11 @@ pub struct School {
     name_ask: Option<NameAsk>,
     listing: Option<Listing>,
     /// File name, link and folder link of what was just saved.
-    link: Option<(String, String, String)>,
+    link: Option<(String, String, String, String)>,
+    /// The save was started by the Consegna button: the link window also offers to email the teacher.
+    handing_in: bool,
+    teacher_email: String,
+    teacher_error: String,
     notice: Option<String>,
 }
 
@@ -107,7 +111,7 @@ impl School {
         egui::Panel::top("school_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // About the width of what follows, so the group sits near the middle.
-                ui.add_space(((ui.available_width() - 560.0) / 2.0).max(8.0));
+                ui.add_space(((ui.available_width() - 720.0) / 2.0).max(8.0));
                 let name = drive::account().unwrap_or_else(|| "Google".to_string());
                 ui.label(RichText::new(name.chars().take(24).collect::<String>()).strong());
                 if ui.button("Esci").on_hover_text("Esci dall'account e prepara il computer per il prossimo alunno").clicked() {
@@ -123,6 +127,17 @@ impl School {
                     drive::list_drive();
                 }
                 if ui.add(egui::Button::new(RichText::new("Salva su Drive").color(ON_YELLOW)).fill(YELLOW).min_size(vec2(150.0, 26.0))).clicked() {
+                    self.handing_in = false;
+                    let ctx = ui.ctx().clone();
+                    match photocraft_ui_egui::menus::invoke(app, &ctx, "file.saveAs", json!({})) {
+                        Ok(_) => {}
+                        Err(e) if e == "cancelled" => {}
+                        Err(e) => self.notice = Some(e),
+                    }
+                }
+                if ui.add(egui::Button::new(RichText::new("Consegna").color(Color32::WHITE).strong()).fill(Color32::from_rgb(66, 133, 244)).min_size(vec2(150.0, 26.0))).on_hover_text("Salva il lavoro nel Drive e consegnalo al docente").clicked() {
+                    self.handing_in = true;
+                    self.teacher_error.clear();
                     let ctx = ui.ctx().clone();
                     match photocraft_ui_egui::menus::invoke(app, &ctx, "file.saveAs", json!({})) {
                         Ok(_) => {}
@@ -237,9 +252,11 @@ impl School {
     }
 
     fn link_window(&mut self, ctx: &egui::Context) {
-        let Some((name, link, folder)) = self.link.clone() else { return };
+        let Some((name, link, folder, id)) = self.link.clone() else { return };
         let mut close = false;
-        egui::Window::new("Salvato nel Drive").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+        let mut send: Option<String> = None;
+        let title = if self.handing_in { "Consegna il lavoro" } else { "Salvato nel Drive" };
+        egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
             ui.set_max_width(440.0);
             ui.label(format!("Salvato nel tuo Google Drive: {name}"));
             ui.add_space(6.0);
@@ -253,11 +270,36 @@ impl School {
             ui.add_space(6.0);
             ui.label("In Classroom: apri il compito, scegli Aggiungi o crea, poi Link, e incolla.");
             ui.hyperlink_to("Apri la cartella nel Drive", folder);
+            if self.handing_in {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.label(format!("Oppure invialo per email a un docente (@{}):", drive::SCHOOL_DOMAIN));
+                let field = ui.add(egui::TextEdit::singleline(&mut self.teacher_email).hint_text(format!("nome@{}", drive::SCHOOL_DOMAIN)).desired_width(440.0));
+                if !self.teacher_error.is_empty() {
+                    ui.colored_label(Color32::from_rgb(230, 80, 70), &self.teacher_error);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Invia al docente").clicked() || (field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                        send = Some(self.teacher_email.trim().to_ascii_lowercase());
+                    }
+                });
+            }
             ui.add_space(6.0);
             if ui.button("Chiudi").clicked() {
                 close = true;
             }
         });
+        if let Some(email) = send {
+            let suffix = format!("@{}", drive::SCHOOL_DOMAIN);
+            let local = email.strip_suffix(&suffix).unwrap_or("");
+            if local.is_empty() || local.contains('@') || local.chars().any(char::is_whitespace) {
+                self.teacher_error = format!("Scrivi l'indirizzo scolastico del docente, che finisce con {suffix}");
+            } else {
+                self.teacher_error.clear();
+                drive::send_to_teacher(&id, &name, &email);
+                close = true;
+            }
+        }
         if close {
             self.link = None;
         }
