@@ -28,10 +28,12 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: trunk
+          tool: trunk@0.21.14
 
       # The upstream packaging script builds the app and the small page that starts it, and cuts
       # the wasm into parts so no file is too large. It writes dist/release/photocraft-web-<ver>.zip.
