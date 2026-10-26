@@ -117,7 +117,7 @@ impl School {
         egui::Panel::top("school_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // About the width of what follows, so the group sits near the middle.
-                ui.add_space(((ui.available_width() - 840.0) / 2.0).max(8.0));
+                ui.add_space(((ui.available_width() - 900.0) / 2.0).max(8.0));
                 let name = drive::account().unwrap_or_else(|| "Google".to_string());
                 ui.label(RichText::new(name.chars().take(24).collect::<String>()).strong());
                 if ui.button("Esci").on_hover_text("Esci dall'account e prepara il computer per il prossimo alunno").clicked() {
@@ -141,6 +141,9 @@ impl School {
                         Err(e) if e == "cancelled" => {}
                         Err(e) => self.notice = Some(e),
                     }
+                }
+                if ui.add(egui::Button::new("Guida")).on_hover_text("Come si usa: accedere, salvare, consegnare").clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab("guida.html"));
                 }
                 if ui.add(egui::Button::new("I miei file").min_size(vec2(110.0, 26.0))).on_hover_text("Guarda i file che hai salvato nel Drive").clicked() {
                     self.browsing = true;
