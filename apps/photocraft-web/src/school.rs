@@ -17,6 +17,54 @@ const YELLOW: Color32 = Color32::from_rgb(250, 204, 21);
 const ON_YELLOW: Color32 = Color32::from_rgb(40, 32, 0);
 const BLUE: Color32 = Color32::from_rgb(66, 133, 244);
 
+/// The tools Simple mode keeps (their `Tool` names); every other tool leaves the toolbar.
+const SIMPLE_TOOLS: &[&str] = &[
+    "Move", "RectMarquee", "EllipseMarquee", "Lasso", "QuickSelection", "MagicWand", "Crop", "Eyedropper", "SpotHealing", "Brush", "Pencil", "Eraser", "Gradient",
+    "PaintBucket", "Blur", "Sharpen", "Dodge", "Burn", "Pen", "DirectSelection", "Type", "Rectangle", "EllipseShape", "Triangle", "Line", "Hand", "Zoom",
+];
+
+/// The menu items Simple mode keeps; every other item of the menus is hidden.
+const SIMPLE_MENU: &[&str] = &[
+    "file.new", "file.open", "file.close", "file.save", "file.saveAs", "file.export.quickExportAsPng", "file.export.exportAs", "file.placeEmbedded",
+    "edit.undo", "edit.redo", "edit.cut", "edit.copy", "edit.paste", "edit.pasteSpecial.pasteInPlace", "edit.clear", "edit.fill", "edit.stroke", "edit.freeTransform",
+    "edit.transform.scale", "edit.transform.rotate", "edit.transform.rotate180", "edit.transform.rotate90Cw", "edit.transform.rotate90Ccw",
+    "edit.transform.flipHorizontal", "edit.transform.flipVertical",
+    "select.all", "select.deselect", "select.inverse", "select.modify.feather", "select.modify.smooth",
+    "image.adjustments.brightnessContrast", "image.adjustments.hueSaturation", "image.adjustments.vibrance", "image.adjustments.blackWhite",
+    "image.adjustments.invert", "image.adjustments.desaturate", "image.autoTone", "image.autoContrast", "image.autoColor", "image.imageSize", "image.canvasSize",
+    "image.imageRotation.180", "image.imageRotation.90cw", "image.imageRotation.90ccw", "image.imageRotation.flipCanvasHorizontal",
+    "image.imageRotation.flipCanvasVertical", "image.crop",
+    "layer.new.layer", "layer.duplicate", "layer.delete", "layer.renameLayer", "layer.arrange.bringToFront", "layer.arrange.bringForward",
+    "layer.arrange.sendBackward", "layer.arrange.sendToBack", "layer.mergeLayers", "layer.mergeVisible", "layer.flattenImage", "layer.hideLayers",
+    "type.panels.character", "type.panels.paragraph", "type.convertToShape",
+    "filter.blur.gaussianBlur", "filter.sharpen.sharpen", "filter.pixelate.mosaic", "filter.stylize.oilPaint", "filter.stylize.emboss", "filter.distort.twirl",
+    "view.zoomIn", "view.zoomOut", "view.fitOnScreen", "view.actualPixels", "view.rulers",
+    "window.panel.layers", "window.panel.color", "window.panel.swatches", "window.panel.history", "window.panel.brushes", "window.panel.options",
+    "help.about",
+];
+
+/// Simple mode: few tools and menu items, for ages 11 to 13. Normal mode shows everything again.
+/// The choice is kept in the preferences, which `Esci` clears for the next student.
+fn apply_mode(app: &mut PhotocraftApp, simple: bool) {
+    app.session.edit_prefs(|p| {
+        p.toolbar.hidden.clear();
+        p.menus.hidden.clear();
+    });
+    if !simple {
+        return;
+    }
+    let tools: Vec<String> = photocraft_ui_egui::Tool::ALL.iter().map(|t| format!("{t:?}")).filter(|name| !SIMPLE_TOOLS.contains(&name.as_str())).collect();
+    let menus: Vec<String> = photocraft_ui_egui::menus::menu_items(app)
+        .into_iter()
+        .map(|item| item.id)
+        .filter(|id| id != "---" && !id.starts_with("edit.preferences") && !SIMPLE_MENU.contains(&id.as_str()))
+        .collect();
+    app.session.edit_prefs(|p| {
+        p.toolbar.hidden = tools;
+        p.menus.hidden = menus;
+    });
+}
+
 thread_local! {
     /// A save asked for a file name: the name suggested and where to send the answer.
     static NAME_REQUEST: RefCell<Option<(String, FileDialogReply)>> = const { RefCell::new(None) };
@@ -48,6 +96,10 @@ pub struct School {
     browsing: bool,
     /// The editor has changes that are not in Drive yet.
     unsaved: bool,
+    /// Simple mode is on (the start of every session).
+    simple: bool,
+    /// The mode was applied once after signing in.
+    mode_applied: bool,
     teacher_email: String,
     teacher_error: String,
     notice: Option<String>,
@@ -121,10 +173,15 @@ impl School {
     /// The bar above the editor: who is signed in, and the Drive buttons.
     pub fn bar(&mut self, ui: &mut egui::Ui, app: &mut PhotocraftApp) {
         self.unsaved = app.has_unsaved_work();
+        if !self.mode_applied {
+            self.mode_applied = true;
+            self.simple = true;
+            apply_mode(app, true);
+        }
         egui::Panel::top("school_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // About the width of what follows, so the group sits near the middle.
-                ui.add_space(((ui.available_width() - 700.0) / 2.0).max(8.0));
+                ui.add_space(((ui.available_width() - 880.0) / 2.0).max(8.0));
                 let name = drive::account().unwrap_or_else(|| "Google".to_string());
                 ui.label(RichText::new(name.chars().take(24).collect::<String>()).strong());
                 if ui.button("Esci").on_hover_text("Esci dall'account e prepara il computer per il prossimo alunno").clicked() {
@@ -134,7 +191,16 @@ impl School {
                         drive::sign_out();
                     }
                 }
-                ui.add_space(16.0);
+                ui.add_space(8.0);
+                for (label, simple) in [("Semplice", true), ("Normale", false)] {
+                    let active = self.simple == simple;
+                    let button = egui::Button::new(RichText::new(label).color(if active { Color32::WHITE } else { ui.visuals().text_color() })).fill(if active { BLUE } else { ui.visuals().widgets.inactive.bg_fill });
+                    if ui.add(button.min_size(vec2(80.0, 26.0))).clicked() && !active {
+                        self.simple = simple;
+                        apply_mode(app, simple);
+                    }
+                }
+                ui.add_space(8.0);
                 if ui.add(egui::Button::new(RichText::new("Apri da Drive").color(ON_YELLOW)).fill(YELLOW).min_size(vec2(150.0, 26.0))).clicked() {
                     self.browsing = false;
                     self.listing = Some(Listing::Loading);
