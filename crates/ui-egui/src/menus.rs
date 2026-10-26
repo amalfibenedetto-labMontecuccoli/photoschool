@@ -1092,6 +1092,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
+    // This school version has no community, ArtCraft or update links.
+    items.retain(|i| !matches!(i.id.as_str(), "help.discord" | "help.artcraftWebsite" | "help.checkForUpdates" | "help.website"));
     // Keep the update command with the links, ahead of System Info and About.
     if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
         let update = items.remove(at);

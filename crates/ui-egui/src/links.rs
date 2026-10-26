@@ -9,8 +9,8 @@ use crate::PhotocraftApp;
 pub const DISCORD: &str = "https://discord.gg/artcraft";
 pub const ARTCRAFT_WEBSITE: &str = "https://getartcraft.com";
 pub const APP_PAGE: &str = "https://getartcraft.com/apps/photocraft";
-pub const GITHUB: &str = "https://github.com/storytold/photocraft";
-pub const ISSUES: &str = "https://github.com/storytold/photocraft/issues";
+pub const GITHUB: &str = "https://github.com/amalfibenedetto-labMontecuccoli/photoschool";
+pub const ISSUES: &str = "https://github.com/amalfibenedetto-labMontecuccoli/photoschool/issues";
 
 /// Help-menu link commands: (id, url). Labels live in `menus::UI_COMMANDS`.
 pub const COMMANDS: &[(&str, &str)] =

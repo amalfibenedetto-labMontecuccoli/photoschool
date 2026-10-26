@@ -700,14 +700,9 @@ fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
         "contributors" => crate::credits::contributors_ui(app, ui),
         "models" => crate::credits::models_ui(ui),
         _ => {
-            ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
+            ui.label("Photoschool — editor di immagini per la scuola, adattato da PhotoCraft (software libero).");
+            ui.label("Adattamento: Benedetto Amalfi, docente di Tecnologia, Scuola Secondaria di I grado R. Montecuccoli.");
             ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
-            ui.add_space(12.0);
-            ui.vertical_centered(|ui| {
-                crate::links::discord_button(app, ui, 220.0);
-                ui.add_space(8.0);
-                crate::links::link_row(app, ui);
-            });
             ui.add_space(10.0);
             ui.weak("egui · wgpu · photocraft-engine");
         }
