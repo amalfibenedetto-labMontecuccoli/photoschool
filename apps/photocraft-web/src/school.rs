@@ -92,8 +92,15 @@ enum Listing {
 pub struct School {
     name_ask: Option<NameAsk>,
     listing: Option<Listing>,
-    /// The list is the "I miei file" one (copy a link, send to the teacher), not "Apri da Drive".
-    browsing: bool,
+    /// The Consegna window is open.
+    hand_in_open: bool,
+    /// A save was started by Consegna: its link is shown, or the file is sent to `pending_email`.
+    handing: bool,
+    /// Save now (the bar has the editor to do it with).
+    want_save: bool,
+    pending_email: Option<String>,
+    /// File name, link, folder link and Drive id of what Consegna saved.
+    link: Option<(String, String, String, String)>,
     /// The editor has changes that are not in Drive yet.
     unsaved: bool,
     /// Simple mode is on (the start of every session).
@@ -137,8 +144,17 @@ impl School {
             inbox.lock().unwrap_or_else(PoisonError::into_inner).push((name, bytes));
             ctx.request_repaint();
         }
-        if let Some((name, ..)) = drive::take_link() {
-            self.notice = Some(format!("Salvato nel tuo Google Drive, cartella «Photoschool»: {name}"));
+        if let Some(link) = drive::take_link() {
+            if self.handing {
+                self.handing = false;
+                if let Some(email) = self.pending_email.take() {
+                    drive::send_to_teacher(&link.3, &link.0, &email);
+                } else {
+                    self.link = Some(link);
+                }
+            } else {
+                self.notice = Some(format!("Salvato nel tuo Google Drive, cartella «Photoschool»: {}", link.0));
+            }
         }
         if let Some(notice) = drive::take_notice() {
             self.notice = Some(notice);
@@ -170,7 +186,7 @@ impl School {
         });
     }
 
-    /// The bar above the editor: who is signed in, and the Drive buttons.
+    /// The bar above the editor: who is signed in, the mode and the three Drive buttons.
     pub fn bar(&mut self, ui: &mut egui::Ui, app: &mut PhotocraftApp) {
         self.unsaved = app.has_unsaved_work();
         if !self.mode_applied {
@@ -178,10 +194,26 @@ impl School {
             self.simple = true;
             apply_mode(app, true);
         }
+        if self.want_save {
+            self.want_save = false;
+            let ctx = ui.ctx().clone();
+            match photocraft_ui_egui::menus::invoke(app, &ctx, "file.saveAs", json!({})) {
+                Ok(_) => {}
+                Err(e) if e == "cancelled" => {
+                    self.handing = false;
+                    self.pending_email = None;
+                }
+                Err(e) => {
+                    self.handing = false;
+                    self.pending_email = None;
+                    self.notice = Some(e);
+                }
+            }
+        }
         egui::Panel::top("school_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // About the width of what follows, so the group sits near the middle.
-                ui.add_space(((ui.available_width() - 880.0) / 2.0).max(8.0));
+                ui.add_space(((ui.available_width() - 820.0) / 2.0).max(8.0));
                 let name = drive::account().unwrap_or_else(|| "Google".to_string());
                 ui.label(RichText::new(name.chars().take(24).collect::<String>()).strong());
                 if ui.button("Esci").on_hover_text("Esci dall'account e prepara il computer per il prossimo alunno").clicked() {
@@ -201,25 +233,17 @@ impl School {
                     }
                 }
                 ui.add_space(8.0);
-                if ui.add(egui::Button::new(RichText::new("Apri da Drive").color(ON_YELLOW)).fill(YELLOW).min_size(vec2(150.0, 26.0))).clicked() {
-                    self.browsing = false;
+                if ui.add(egui::Button::new(RichText::new("Apri dal Drive").color(ON_YELLOW)).fill(YELLOW).min_size(vec2(150.0, 26.0))).clicked() {
                     self.listing = Some(Listing::Loading);
                     drive::list_drive();
                 }
                 if ui.add(egui::Button::new(RichText::new("Salva su Drive").color(ON_YELLOW)).fill(YELLOW).min_size(vec2(150.0, 26.0))).clicked() {
-                    let ctx = ui.ctx().clone();
-                    match photocraft_ui_egui::menus::invoke(app, &ctx, "file.saveAs", json!({})) {
-                        Ok(_) => {}
-                        Err(e) if e == "cancelled" => {}
-                        Err(e) => self.notice = Some(e),
-                    }
+                    self.handing = false;
+                    self.want_save = true;
                 }
-                let files = ui.add(egui::Button::new(RichText::new("I miei file").color(Color32::WHITE).strong()).fill(BLUE).min_size(vec2(120.0, 26.0)));
-                if files.on_hover_text("I file che hai salvato: copia il link per Classroom o invialo al docente").clicked() {
-                    self.browsing = true;
+                if ui.add(egui::Button::new(RichText::new("Consegna").color(Color32::WHITE).strong()).fill(BLUE).min_size(vec2(150.0, 26.0))).clicked() {
+                    self.hand_in_open = true;
                     self.teacher_error.clear();
-                    self.listing = Some(Listing::Loading);
-                    drive::list_drive();
                 }
             });
         });
@@ -230,6 +254,8 @@ impl School {
         self.notice_window(ctx);
         self.name_window(ctx);
         self.list_window(ctx);
+        self.hand_in_window(ctx);
+        self.link_window(ctx);
         let _ = inbox;
     }
 
@@ -277,6 +303,9 @@ impl School {
         });
         let stem = clean_stem(&ask.stem);
         if cancel {
+            // Backing out of the name also backs out of the hand-in that asked for it.
+            self.handing = false;
+            self.pending_email = None;
             ask.reply.send(None);
         } else if save && !stem.is_empty() {
             ask.reply.send(Some(FileDialogAnswer::SaveTo(format!("{stem}{}", ask.extension))));
@@ -285,32 +314,13 @@ impl School {
         }
     }
 
-    /// "Apri da Drive" (click a file to open it) and "I miei file" (copy the link of a file that is
-    /// already saved, send it to the teacher, look at it in Drive).
+    /// "Apri dal Drive": click a file to open it in the editor.
     fn list_window(&mut self, ctx: &egui::Context) {
         let Some(listing) = &self.listing else { return };
-        let browsing = self.browsing;
-        let unsaved = self.unsaved;
         let mut close = false;
         let mut open: Option<(String, String)> = None;
-        let mut send: Option<(String, String)> = None;
-        let title = if browsing { "I miei file nel Drive" } else { "Apri da Drive" };
-        egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-            ui.set_min_width(if browsing { 560.0 } else { 380.0 });
-            if browsing {
-                ui.label("Per consegnare: copia il link accanto al file e incollalo in Classroom, oppure invialo al docente.");
-                if unsaved {
-                    ui.colored_label(Color32::from_rgb(230, 160, 40), "Hai modifiche non salvate: prima premi Salva su Drive, poi il file qui sotto sarà aggiornato.");
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Email del docente:");
-                    ui.add(egui::TextEdit::singleline(&mut self.teacher_email).hint_text(format!("nome@{}", drive::SCHOOL_DOMAIN)).desired_width(280.0));
-                });
-                if !self.teacher_error.is_empty() {
-                    ui.colored_label(Color32::from_rgb(230, 80, 70), &self.teacher_error);
-                }
-                ui.separator();
-            }
+        egui::Window::new("Apri dal Drive").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+            ui.set_min_width(380.0);
             match listing {
                 Listing::Loading => {
                     ui.label("Cerco i tuoi file nel Drive…");
@@ -325,21 +335,7 @@ impl School {
                     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                         for (id, name, modified) in files {
                             let label = if modified.is_empty() { name.clone() } else { format!("{name}   ({modified})") };
-                            if browsing {
-                                ui.horizontal(|ui| {
-                                    ui.label(label);
-                                    let link = format!("https://drive.google.com/file/d/{id}/view");
-                                    if ui.button("Copia link").clicked() {
-                                        ctx.copy_text(link.clone());
-                                    }
-                                    if ui.button("Invia al docente").clicked() {
-                                        send = Some((id.clone(), name.clone()));
-                                    }
-                                    if ui.button("Vedi nel Drive").clicked() {
-                                        ctx.open_url(egui::OpenUrl::new_tab(link));
-                                    }
-                                });
-                            } else if ui.add(egui::Button::new(label).min_size(vec2(380.0, 28.0))).clicked() {
+                            if ui.add(egui::Button::new(label).min_size(vec2(380.0, 28.0))).clicked() {
                                 open = Some((id.clone(), name.clone()));
                             }
                         }
@@ -355,17 +351,92 @@ impl School {
             drive::open_drive_file(&id, &name);
             close = true;
         }
-        if let Some((id, name)) = send {
+        if close {
+            self.listing = None;
+        }
+    }
+
+    /// Consegna: save the work in Drive and copy its link for Classroom, or send it to a teacher.
+    fn hand_in_window(&mut self, ctx: &egui::Context) {
+        if !self.hand_in_open {
+            return;
+        }
+        let (mut link, mut send, mut close) = (false, false, false);
+        egui::Window::new("Consegna il lavoro").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+            ui.set_max_width(400.0);
+            ui.label("Salva il lavoro nel tuo Google Drive e ottieni il link da incollare nel compito di Classroom.");
+            ui.add_space(8.0);
+            if ui.add(egui::Button::new(RichText::new("Salva e copia il link").size(16.0)).min_size(vec2(400.0, 36.0))).clicked() {
+                link = true;
+            }
+            ui.add_space(10.0);
+            ui.separator();
+            ui.label("Oppure invialo per email a un docente:");
+            let field = ui.add(egui::TextEdit::singleline(&mut self.teacher_email).hint_text(format!("nome@{}", drive::SCHOOL_DOMAIN)).desired_width(400.0));
+            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                send = true;
+            }
+            if !self.teacher_error.is_empty() {
+                ui.colored_label(Color32::from_rgb(230, 80, 70), &self.teacher_error);
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Invia").clicked() {
+                    send = true;
+                }
+                if ui.button("Annulla").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if link {
+            self.hand_in_open = false;
+            self.handing = true;
+            self.pending_email = None;
+            self.want_save = true;
+        }
+        if send {
             match teacher_address(&self.teacher_email) {
                 Ok(email) => {
                     self.teacher_error.clear();
-                    drive::send_to_teacher(&id, &name, &email);
+                    self.hand_in_open = false;
+                    self.handing = true;
+                    self.pending_email = Some(email);
+                    self.want_save = true;
                 }
                 Err(e) => self.teacher_error = e,
             }
         }
         if close {
-            self.listing = None;
+            self.hand_in_open = false;
+        }
+    }
+
+    /// The window shown once the work is saved for hand-in: the link and what to do with it.
+    fn link_window(&mut self, ctx: &egui::Context) {
+        let Some((name, link, folder, _)) = self.link.clone() else { return };
+        let mut close = false;
+        egui::Window::new("Lavoro salvato").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+            ui.set_max_width(440.0);
+            ui.label(format!("Salvato nel tuo Google Drive: {name}"));
+            ui.add_space(6.0);
+            ui.label("Link da incollare in Classroom:");
+            let mut shown = link.clone();
+            ui.add(egui::TextEdit::singleline(&mut shown).desired_width(440.0));
+            ui.add_space(4.0);
+            if ui.add(egui::Button::new(RichText::new("Copia link").size(15.0)).min_size(vec2(140.0, 30.0))).clicked() {
+                ctx.copy_text(link.clone());
+            }
+            ui.add_space(6.0);
+            ui.label("In Classroom: apri il compito, scegli Aggiungi o crea, poi Link, e incolla.");
+            ui.add(egui::Hyperlink::from_label_and_url("Apri la cartella nel Drive", folder).open_in_new_tab(true));
+            ui.add_space(6.0);
+            if ui.button("Chiudi").clicked() {
+                close = true;
+            }
+        });
+        if close {
+            self.link = None;
         }
     }
 }
