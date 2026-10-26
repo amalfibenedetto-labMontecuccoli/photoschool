@@ -103,6 +103,8 @@ pub struct School {
     want_save: bool,
     /// The editor has changes that are not in Drive yet.
     unsaved: bool,
+    /// The name of the document open in the editor.
+    active_name: Option<String>,
     /// Simple mode is on (the start of every session).
     simple: bool,
     /// The mode was applied once after signing in.
@@ -186,6 +188,7 @@ impl School {
     /// The bar above the editor: who is signed in, the mode and the three Drive buttons.
     pub fn bar(&mut self, ui: &mut egui::Ui, app: &mut PhotocraftApp) {
         self.unsaved = app.has_unsaved_work();
+        self.active_name = app.session.active().map(|d| d.doc.name.clone());
         if !self.mode_applied {
             self.mode_applied = true;
             self.simple = true;
@@ -358,6 +361,7 @@ impl School {
         let (mut copy, mut send, mut close) = (false, false, false);
         let latest = self.latest.clone();
         let (fetching, unsaved, copied) = (self.fetching_latest, self.unsaved, self.link_copied);
+        let active = self.active_name.clone();
         egui::Window::new("Consegna il lavoro").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
             ui.set_max_width(420.0);
             match &latest {
@@ -369,6 +373,12 @@ impl School {
                 }
                 Some((_, name)) => {
                     ui.label(RichText::new(format!("Ultimo file salvato: {name}")).strong());
+                    if let Some(active) = &active {
+                        ui.label(format!("Documento aperto ora: {active}"));
+                        if active != name {
+                            ui.colored_label(Color32::from_rgb(230, 160, 40), "Attenzione: il documento aperto non è quello salvato per ultimo. Per consegnare questo, premi prima Salva su Drive.");
+                        }
+                    }
                     if unsaved {
                         ui.colored_label(Color32::from_rgb(230, 160, 40), "Hai modifiche non salvate: premi prima Salva su Drive, così consegni il lavoro aggiornato.");
                     }
