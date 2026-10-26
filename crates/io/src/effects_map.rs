@@ -122,14 +122,47 @@ fn contour(d: &Descriptor, key: &str) -> Contour {
     let linear = points.len() == 2 && points[0].input == 0.0 && points[0].output == 0.0 && points[1].input == 1.0 && points[1].output == 1.0;
     if points.is_empty() || (linear && (name.is_empty() || name == "Linear")) { Contour::Linear } else { Contour::Custom { name, points, corners } }
 }
+/// The most points Photoshop reads in an effect's contour (`ShpC` › `Crv `): a layer whose effects
+/// carry a longer one fails to load ("A problem was encountered reading layer … program error"),
+/// and Photoshop then drops all of its effects; 16 loads (#9556).
+const PSD_CONTOUR_POINTS: usize = 16;
+
+/// Indices of the contour points a PSD keeps, in order: all of them up to [`PSD_CONTOUR_POINTS`],
+/// else both ends and then, one at a time, the point farthest (in output) from the line between
+/// the kept points around it, so peaks and valleys (Ring - Double's two rings) survive.
+fn psd_contour_points(points: &[CurvePoint]) -> Vec<usize> {
+    if points.len() <= PSD_CONTOUR_POINTS {
+        return (0..points.len()).collect();
+    }
+    let mut kept = vec![0, points.len() - 1];
+    while kept.len() < PSD_CONTOUR_POINTS {
+        let mut farthest: Option<(f32, usize)> = None;
+        for pair in kept.windows(2) {
+            let &[a, b] = pair else { continue };
+            let (Some(pa), Some(pb)) = (points.get(a), points.get(b)) else { continue };
+            let span = pb.input - pa.input;
+            for (i, p) in points.iter().enumerate().take(b).skip(a + 1) {
+                let t = if span.abs() > f32::EPSILON { (p.input - pa.input) / span } else { 0.0 };
+                let off = (p.output - (pa.output + t * (pb.output - pa.output))).abs();
+                if off.is_finite() && farthest.is_none_or(|(f, _)| off > f) {
+                    farthest = Some((off, i));
+                }
+            }
+        }
+        let Some((_, i)) = farthest else { break };
+        kept.insert(kept.partition_point(|&k| k < i), i);
+    }
+    kept
+}
+
 fn contour_value(c: &Contour) -> Value {
     let (name, points) = match c {
         Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
         Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
     };
-    let pts = points
-        .iter()
-        .enumerate()
+    let pts = psd_contour_points(&points)
+        .into_iter()
+        .filter_map(|i| points.get(i).map(|p| (i, p)))
         .map(|(i, p)| {
             let d = Descriptor::new("CrPt").with("Hrzn", Value::Double(f64::from(p.input * 255.0))).with("Vrtc", Value::Double(f64::from(p.output * 255.0)));
             // Photoshop writes no `Cnty` (continuity) on smooth points; a corner carries `Cnty` false.
@@ -643,6 +676,47 @@ pub fn parse_lrfx(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
 #[allow(clippy::unreachable)] // clippy.toml exempts unwrap/expect/panic in tests, not unreachable!
 mod tests {
     use super::*;
+
+    fn crv(v: &Value) -> Vec<(f64, f64)> {
+        let Value::Descriptor(d) = v else { panic!("ShpC") };
+        let Some(Value::List(pts)) = d.get("Crv ") else { panic!("Crv ") };
+        pts.iter()
+            .map(|p| {
+                let Value::Descriptor(p) = p else { panic!("CrPt") };
+                let n = |k: &str| match p.get(k) {
+                    Some(Value::Double(x)) => *x,
+                    _ => panic!("{k}"),
+                };
+                (n("Hrzn"), n("Vrtc"))
+            })
+            .collect()
+    }
+
+    /// #9556: Photoshop drops every effect of a layer whose contour has more than 16 points. A
+    /// 29-point contour with two rings is written as 16 points that keep both ends and both peaks;
+    /// up to 16 points are written as they are.
+    #[test]
+    fn psd_contours_keep_at_most_16_points_and_their_peaks() {
+        let points: Vec<CurvePoint> = (0..29)
+            .map(|i| {
+                let x = i as f32 / 28.0;
+                // Rings at x = 0.25 and 0.75, small wiggles between.
+                let y = (1.0 - ((x - 0.25).abs() * 8.0)).max(0.0).max(1.0 - (x - 0.75).abs() * 8.0) + if i % 2 == 0 { 0.0 } else { 0.01 };
+                CurvePoint { input: x, output: y.clamp(0.0, 1.0) }
+            })
+            .collect();
+        let c = Contour::Custom { name: "Two rings".into(), points: points.clone(), corners: vec![false; 29] };
+        let out = crv(&contour_value(&c));
+        assert_eq!(out.len(), 16);
+        assert_eq!(out.first().copied(), Some((0.0, f64::from(points[0].output) * 255.0)));
+        assert_eq!(out.last().map(|p| p.0), Some(255.0));
+        let peak = |x: f32| out.iter().any(|p| ((p.0 / 255.0) as f32 - x).abs() < 0.03 && p.1 > 240.0);
+        assert!(peak(0.25) && peak(0.75), "both rings kept: {out:?}");
+        assert!(out.windows(2).all(|w| w[0].0 < w[1].0), "in order: {out:?}");
+
+        let short = Contour::Custom { name: "Short".into(), points: points[..16].to_vec(), corners: vec![false; 16] };
+        assert_eq!(crv(&contour_value(&short)).len(), 16);
+    }
 
     fn sample_effects() -> Vec<Effect> {
         let g = Gradient {
