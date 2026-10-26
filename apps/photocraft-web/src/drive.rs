@@ -51,6 +51,9 @@ thread_local! {
     static TOKEN: RefCell<Option<Token>> = const { RefCell::new(None) };
     /// A link ready to show: the file name, its link and the folder's link, taken by the app's
     /// next frame.
+    /// The file saved last in this session: name, link, folder link, Drive id. Hand in uses it
+    /// at once, without waiting for another upload.
+    static LAST_SAVED: RefCell<Option<(String, String, String, String)>> = const { RefCell::new(None) };
     static LINK: RefCell<Option<(String, String, String, String)>> = const { RefCell::new(None) };
     /// The signed-in student's name.
     static USER: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -81,7 +84,13 @@ pub fn take_link() -> Option<(String, String, String, String)> {
     LINK.with(|l| l.borrow_mut().take())
 }
 
+/// The file saved last in this session, if any: (name, link, folder link, Drive id).
+pub fn last_saved() -> Option<(String, String, String, String)> {
+    LAST_SAVED.with(|l| l.borrow().clone())
+}
+
 fn publish_link(name: &str, link: &str, folder: &str, id: &str) {
+    LAST_SAVED.with(|l| *l.borrow_mut() = Some((name.to_string(), link.to_string(), folder.to_string(), id.to_string())));
     LINK.with(|l| *l.borrow_mut() = Some((name.to_string(), link.to_string(), folder.to_string(), id.to_string())));
     wake();
 }
