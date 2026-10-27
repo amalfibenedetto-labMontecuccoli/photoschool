@@ -434,6 +434,31 @@ fn marquee_dragged_past_the_canvas_stops_at_its_edge() {
 }
 
 #[test]
+fn subtract_clears_selection_when_only_disjoint_off_canvas_pixels_remain() {
+    let mut s = session_with_doc(); // 64 × 48
+    let mut selection = Surface::new(photocraft_color::PixelFormat::GRAY8);
+    // Simulate a moved sparse selection: one remnant on either side of the canvas and one
+    // in-canvas region that the subtract marquee will remove. The off-canvas bounds straddle
+    // the canvas, so testing only their bounding-box intersection would incorrectly keep it.
+    selection.fill_rect(Rect::new(-4, 10, 0, 14), &[1.0]);
+    selection.fill_rect(Rect::new(20, 10, 24, 14), &[1.0]);
+    selection.fill_rect(Rect::new(64, 10, 68, 14), &[1.0]);
+    s.active_mut().unwrap().doc.selection = Some(selection);
+
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 64, "height": 48, "mode": "subtract"})).unwrap();
+
+    assert!(s.active().unwrap().doc.selection.is_none());
+}
+
+#[test]
+fn subtract_clears_selection_with_nonzero_default_when_canvas_is_empty() {
+    let mut s = session_with_doc();
+    s.active_mut().unwrap().doc.selection = Some(Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 64, "height": 48, "mode": "subtract"})).unwrap();
+    assert!(s.active().unwrap().doc.selection.is_none());
+}
+
+#[test]
 fn marquee_steps_are_named_after_their_tool() {
     // #513: the elliptical marquee shares `select.rect` but records its own step name.
     let mut s = session_with_doc();
